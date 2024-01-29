@@ -1,0 +1,565 @@
+import { Stream } from "stream";
+
+import { ObjectID, ObjectId } from "bson";
+import { ObjectId as MongoObjectId } from "mongodb";
+
+import { StockInfoInterface } from "@app-types/models/order";
+import { StockInterface } from "@app-types/models/stock";
+import getOrderModel from "@models/order";
+import getStockModel, {
+  getFilesCollection,
+  getStockGFSBucket,
+} from "@models/stock";
+import { RandomStock } from "@src/types";
+import { error } from "@util/log";
+import StockManager from "@util/stock/StockManager";
+
+const TRUE = true;
+class MongoDBStockManager implements StockManager {
+  getStockByIdGridFS(stock: StockInterface): Promise<Stream> {
+    return new Promise(async (resolve, reject) => {
+      /*
+      if (!stock.gridFS) {
+        reject(new Error("Stock is not a file!"));
+      }
+       */
+      try {
+        const gfsBucket = await getStockGFSBucket();
+        resolve(gfsBucket.openDownloadStream(stock.data));
+      } catch (err) {
+        reject(err);
+      }
+      /*
+      const conn = await dbConnect();
+      const gridFS = Grid(conn.connection.db, mongoose.mongo);
+      resolve(
+        gridFS.createReadStream({
+          _id: stock.data as string,
+        })
+      );
+       */
+    });
+  }
+
+  saveStockBufferGridFS(
+    data: Buffer,
+    stock: any,
+    fileName: string | undefined | null
+  ): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+      /*
+      const conn = await dbConnect();
+      const gridFS = Grid(conn.connection.db, mongoose.mongo);
+      const writeStream = gridFS.createWriteStream({
+        filename: stock._id?.toString() || `stock-${new Date().getTime()}`,
+        metadata: {
+          type: "stock",
+          stockId: stock._id,
+          productId: stock.productId,
+          optionId: stock.optionId,
+          timestamp: new Date(),
+        },
+      });
+      writeStream.write(data);
+      writeStream.end();
+      writeStream.on("close", (file: any) => {
+        stock.data = file._id;
+        resolve(file._id);
+      });
+      writeStream.on("error", (err: any) => {
+        reject(err);
+      });
+       */
+      try {
+        const gfsBucket = await getStockGFSBucket();
+        const uploadStream = gfsBucket.openUploadStream(
+          fileName || stock._id?.toString() || `stock-${new Date().getTime()}`,
+          {
+            metadata: {
+              type: "stock",
+              stockId: stock._id,
+              productId: stock.productId,
+              optionId: stock.optionId,
+              timestamp: new Date(),
+              used: false,
+              orderId: null,
+              userId: null,
+            },
+          }
+        );
+        uploadStream.write(data);
+        uploadStream.end();
+        uploadStream.on("finish", (file: any) => {
+          stock.data = file._id;
+          resolve(file._id.toString());
+        });
+        uploadStream.on("error", (err: any) => {
+          reject(err);
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  getStockByIdStream(id: string): Promise<Stream> {
+    return new Promise(async (resolve, reject) => {
+      const StockModel = await getStockModel();
+      const stock = await StockModel.findOne({
+        _id: id,
+      });
+      if (!stock) {
+        reject(new Error("Stock not found"));
+        return;
+      }
+      if (stock.type === "file") {
+        if (!stock.data) {
+          reject(new Error("Stock data not found"));
+          return;
+        }
+        try {
+          const stream = await this.getStockByIdGridFS(stock);
+          resolve(stream);
+        } catch (err) {
+          reject(err);
+        }
+        /*
+        if (stock.gridFS) {
+          ...
+          return;
+        }
+        const bufferStream = new Stream.PassThrough();
+        bufferStream.end(stock.data);
+        resolve(bufferStream as Stream);
+         */
+      } else {
+        reject(new Error("Stock is not a file!"));
+      }
+    });
+  }
+
+  getStockById(id: string): Promise<Stream | string> {
+    return new Promise(async (resolve, reject) => {
+      const StockModel = await getStockModel();
+      const stock = await StockModel.findOne({
+        _id: id,
+      });
+      if (!stock) {
+        reject(new Error("Stock not found"));
+        return;
+      }
+      if (stock.type === "file") {
+        if (!stock.data) {
+          reject(new Error("Stock data not found"));
+          return;
+        }
+        try {
+          const stream = await this.getStockByIdGridFS(stock);
+          resolve(stream);
+        } catch (err) {
+          reject(err);
+        }
+        /*
+        if (stock.gridFS) {
+          ...
+          return;
+        }
+        const bufferStream = new Stream.PassThrough();
+        bufferStream.end(stock.data);
+        resolve(bufferStream as Stream);
+         */
+      } else {
+        resolve(stock.data as string);
+      }
+    });
+  }
+
+  getStockByIdString(id: string): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+      if (TRUE) {
+        reject(new Error("Text type is no longer supported!"));
+        return;
+      }
+      const StockModel = await getStockModel();
+      const stock = await StockModel.findOne({
+        _id: id,
+      });
+      if (!stock) {
+        reject(new Error("Stock not found"));
+        return;
+      }
+      if (stock.type === "text") {
+        resolve(stock.data as string);
+      } else {
+        reject(new Error("Stock is not text!"));
+      }
+    });
+  }
+
+  saveStockBuffer(
+    data: Buffer,
+    productId: string,
+    optionId: string,
+    fileName: string | undefined | null,
+    metadata: any | undefined
+  ): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+      const StockModel = await getStockModel();
+      // const isOverSize = data.length > MAX_MONGO_SIZE;
+      const stock = new StockModel({
+        productId,
+        optionId,
+        type: "file",
+        timestamp: new Date(),
+      });
+      if (fileName) stock.fileName = fileName;
+      try {
+        const id = await this.saveStockBufferGridFS(data, stock, fileName);
+        stock.data = new ObjectId(id);
+      } catch (err) {
+        error(err);
+        reject(err);
+      }
+      if (metadata) {
+        stock.metadata = metadata;
+      }
+      const result = await stock.save();
+      resolve(result._id.toString());
+    });
+  }
+
+  saveReplacement(
+    data: Buffer,
+    orderId: string,
+    fileName: string
+  ): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+      const StockModel = await getStockModel();
+      const OrderModel = await getOrderModel();
+      const order = await OrderModel.findById(orderId);
+      if (!order) {
+        reject(new Error("Order not found"));
+        return;
+      }
+      const stock = new StockModel({
+        productId: order.subOrders[0].product,
+        optionId: order.subOrders[0].productOptionId,
+        orderId: order._id,
+        type: "file",
+        timestamp: new Date(),
+        fileName,
+        // user: order.user,
+        used: true,
+      });
+      try {
+        const id = await this.saveStockBufferGridFS(data, stock, fileName);
+        stock.data = new ObjectId(id);
+      } catch (err) {
+        error(err);
+        reject(err);
+      }
+      const result = await stock.save();
+      const replacement: any = {
+        id: new ObjectId(result._id),
+        replacement: true,
+        fileName: result.fileName,
+      } as StockInfoInterface;
+      // push this onto the order
+      if (!order.subOrders[0].stocks) order.subOrders[0].stocks = [];
+      order.subOrders[0].stocks.push(replacement);
+      await order.updateOne(order);
+      resolve(result._id.toString());
+    });
+  }
+
+  saveStockString(
+    data: string,
+    productId: string,
+    optionId: string,
+    metadata: any | undefined
+  ): Promise<string> {
+    return new Promise(async (resolve, reject) => {
+      if (TRUE) {
+        reject(new Error("Text type is no longer supported!"));
+        return;
+      }
+      const StockModel = await getStockModel();
+      const stock = new StockModel({
+        data,
+        type: "text",
+        productId,
+        optionId,
+        timestamp: new Date(),
+      });
+      if (metadata) {
+        stock.metadata = metadata;
+      }
+      const result = await stock.save();
+      resolve(result._id);
+    });
+  }
+
+  getStockAmount(productId: string, optionId: string): Promise<number> {
+    return new Promise(async (resolve) => {
+      const StockModel = await getStockModel();
+      // count the amount of stock where used is undefined/false
+      const amount = await StockModel.countDocuments({
+        productId,
+        optionId,
+        used: false,
+      });
+      resolve(amount);
+    });
+  }
+
+  getStockAmountProduct(productId: string): Promise<number> {
+    return new Promise(async (resolve) => {
+      const StockModel = await getStockModel();
+      // count the amount of stock where used is undefined/false
+      const amount = await StockModel.countDocuments({
+        productId,
+        used: false,
+      });
+      resolve(amount);
+    });
+  }
+
+  deleteStockById(id: string): Promise<void> {
+    return new Promise(async (resolve, reject) => {
+      const StockModel = await getStockModel();
+      const stock = await StockModel.findById(id);
+      if (!stock) {
+        reject(new Error("Stock not found"));
+        return;
+      }
+      if (stock.orderId) {
+        const OrderModel = await getOrderModel();
+        const order = await OrderModel.findOne({
+          _id: stock.orderId,
+        });
+        if (order) {
+          const subOrder = order.subOrders[0];
+          if (subOrder.stocks) {
+            // remove the stock from the order
+            const index = subOrder.stocks.findIndex(
+              (s: StockInfoInterface) => s.id?.toString() === id
+            );
+            if (index > -1) {
+              subOrder.stocks.splice(index, 1);
+              order.subOrders[0] = subOrder;
+              // upsert the order
+              await order.updateOne(order, { upsert: true });
+            }
+          }
+        }
+      }
+      await StockModel.deleteOne({
+        _id: id,
+      });
+      // delete from gridfs
+      const stockId = new ObjectID(id);
+      const gfsBucket = await getStockGFSBucket();
+      const cursor = gfsBucket.find({
+        "metadata.stockId": stockId,
+      });
+      await cursor.forEach(async (doc: any) => {
+        await gfsBucket.delete(doc._id);
+      });
+      resolve();
+    });
+  }
+
+  deleteAllStock(productId: string, optionId: string): Promise<void> {
+    return new Promise(async (resolve) => {
+      const StockModel = await getStockModel();
+      await StockModel.deleteMany({
+        productId,
+        optionId,
+      });
+      // delete from gridfs
+      const gfsBucket = await getStockGFSBucket();
+      const cursor = gfsBucket.find({
+        "metadata.productId": productId,
+        "metadata.optionId": optionId,
+      });
+      await cursor.forEach(async (doc: any) => {
+        await gfsBucket.delete(doc._id);
+      });
+      resolve();
+    });
+  }
+
+  deleteAllStockExceptUsed(productId: string, optionId: string): Promise<void> {
+    return new Promise(async (resolve) => {
+      // same as deleteAllStock, but only delete where used is false
+      const StockModel = await getStockModel();
+      await StockModel.deleteMany({
+        productId,
+        optionId,
+        used: false,
+      });
+      // delete from gridfs, except where used is true (in metadata)
+      const gfsBucket = await getStockGFSBucket();
+      const cursor = gfsBucket.find({
+        "metadata.productId": productId,
+        "metadata.optionId": optionId,
+        "metadata.used": false,
+      });
+      await cursor.forEach(async (doc: any) => {
+        await gfsBucket.delete(doc._id);
+      });
+      resolve();
+    });
+  }
+
+  deleteAllStockProduct(productId: string): Promise<void> {
+    return new Promise(async (resolve) => {
+      const StockModel = await getStockModel();
+      await StockModel.deleteMany({
+        productId,
+      });
+      // delete from gridfs
+      const gfsBucket = await getStockGFSBucket();
+      const cursor = gfsBucket.find({
+        "metadata.productId": productId,
+      });
+      await cursor.forEach(async (doc: any) => {
+        await gfsBucket.delete(doc._id);
+      });
+      resolve();
+    });
+  }
+
+  getRandomStock(
+    productId: string,
+    optionId: string,
+    amount: number
+  ): Promise<RandomStock[]> {
+    return new Promise(async (resolve) => {
+      const StockModel = await getStockModel();
+      // find x amount of random stock where used is false. Return the _id field, and fileName
+      const result = await StockModel.aggregate([
+        {
+          $match: {
+            productId: new ObjectId(productId),
+            optionId: new ObjectId(optionId),
+            used: false,
+          },
+        },
+        {
+          $sample: {
+            size: amount,
+          },
+        },
+        {
+          $project: {
+            _id: 1,
+            fileName: 1,
+          },
+        },
+      ]);
+      resolve(JSON.parse(JSON.stringify(result)) as RandomStock[]);
+    });
+  }
+
+  markStockAsUsed(
+    stockIds: string[],
+    orderId: string,
+    userId: string | null
+  ): Promise<void> {
+    return new Promise(async (resolve) => {
+      const StockModel = await getStockModel();
+      await StockModel.updateMany(
+        {
+          _id: {
+            $in: stockIds.map((s) => new ObjectId(s.toString())),
+          },
+        },
+        {
+          $set: {
+            used: true,
+            orderId: new ObjectId(orderId.toString()),
+            ...(userId ? { user: new ObjectId(userId.toString()) } : {}),
+          },
+        }
+      );
+      // modify stock_files.files to add orderId, userId, and set used to true
+      const filesCollection = await getFilesCollection();
+      // really hacky but whatever it works
+      await filesCollection.updateMany(
+        {
+          "metadata.stockId": {
+            $in: stockIds.map((s) => new MongoObjectId(s)),
+          },
+        },
+        {
+          $set: {
+            "metadata.used": true,
+            "metadata.orderId": new MongoObjectId(orderId),
+            ...(userId ? { "metadata.userId": new MongoObjectId(userId) } : {}),
+          },
+        }
+      );
+      resolve();
+    });
+  }
+
+  markStockAsUnused(stockIds: string[]): Promise<void> {
+    return new Promise(async (resolve) => {
+      // filter out null, undefined, and empty strings
+      const filtered = stockIds.filter((s) => s && s.length > 0);
+      const StockModel = await getStockModel();
+      await StockModel.updateMany(
+        {
+          _id: {
+            $in: filtered.map((s) => new ObjectId(s.toString())),
+          },
+        },
+        {
+          $set: {
+            used: false,
+            orderId: null,
+            user: null,
+          },
+        }
+      );
+      // modify stock_files.files to remove orderId, userId, and set used to false
+      const filesCollection = await getFilesCollection();
+      // really hacky but whatever it works
+      await filesCollection.updateMany(
+        {
+          "metadata.stockId": {
+            $in: stockIds.map((s) => new MongoObjectId(s)),
+          },
+        },
+        {
+          $set: {
+            "metadata.used": false,
+            "metadata.orderId": null,
+            "metadata.userId": null,
+          },
+        }
+      );
+      resolve();
+    });
+  }
+
+  deleteStockByOrderId(orderId: string): Promise<void> {
+    return new Promise(async (resolve) => {
+      const StockModel = await getStockModel();
+      const stock = await StockModel.find({
+        orderId: new ObjectId(orderId), // Find all stocks with the order id
+      });
+      const promises = stock.map((s: StockInterface) => {
+        if (!s || !s._id) {
+          return Promise.resolve();
+        }
+        return this.deleteStockById(s._id.toString());
+      });
+      await Promise.all(promises);
+      resolve();
+    });
+  }
+}
+const sm = new MongoDBStockManager();
+export default sm;

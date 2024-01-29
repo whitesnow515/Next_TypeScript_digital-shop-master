@@ -1,0 +1,18 @@
+[
+  {
+    "path": "/profile/*",
+    "roles": ["user", "support", "trial_support"]
+  },
+  {
+    "path": "/orders/*",
+    "roles": ["user", "support", "trial_support"]
+  },
+  {
+    "path": "/checkout/*",
+    "roles": ["user", "support", "trial_support"]
+  },
+  {
+    "path": "/admin/*",
+    "roles": ["support", "trial_support"]
+  }
+]

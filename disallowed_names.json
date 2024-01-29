@@ -1,0 +1,18 @@
+{
+  "regex": "^[a-zA-Z0-9]$",
+  "names": [
+    "admin",
+    "administrator",
+    "root",
+    "sysadmin",
+    "system",
+    "manager",
+    "user",
+    "test",
+    "guest",
+    "demo",
+    "operator",
+    "staff",
+    "support"
+  ]
+}

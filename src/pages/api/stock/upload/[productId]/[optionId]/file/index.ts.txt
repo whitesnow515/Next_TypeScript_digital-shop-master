@@ -1,0 +1,87 @@
+import { NextApiHandler, NextApiRequest, NextApiResponse } from "next";
+
+import { ProductOption } from "@app-types/models/product";
+import getProductModel from "@models/product";
+import requireLoggedIn from "@util/AuthUtils";
+import {supportRoles} from "@util/Roles";
+import withFiles from "@util/FileUpload";
+import { log } from "@util/log";
+import getStockManager from "@util/stock/StockManagerHolder";
+
+const handler: NextApiHandler = async (
+  req: NextApiRequest,
+  res: NextApiResponse
+) => {
+  try {
+    const token = await requireLoggedIn(req, res, ["admin"], true);
+    if (!token) {
+      return;
+    }
+    const { productId, optionId } = req.query;
+    // @ts-ignore
+    const { files }: any[] = req;
+    if (!files || files.length === 0) {
+      log("No file");
+      res.status(400).json({ error: true, message: "No file" });
+      return;
+    }
+    // check if productId and optionId are valid
+    const ProductModel = await getProductModel();
+    const product = await ProductModel.findById(productId as string);
+    if (!product) {
+      res.status(400).json({ error: true, message: "Invalid product" });
+      return;
+    }
+    const option = product.options.find(
+      (o: ProductOption) => o._id?.toString() === (optionId as string)
+    );
+    if (!option) {
+      res.status(400).json({ error: true, message: "Invalid option" });
+      return;
+    }
+    const errors: any[] = [];
+    let success: number = 0;
+    const promises = files.map(async (file: any) => {
+      const { originalname } = file;
+      return getStockManager()
+        .saveStockBuffer(
+          file.buffer,
+          productId as string,
+          optionId as string,
+          originalname,
+          undefined
+        )
+        .then((newId) => {
+          log("newId", newId);
+          success += 1;
+        })
+        .catch((err) => {
+          log("err", err);
+          errors.push(err);
+        });
+    });
+    await Promise.all(promises);
+    if (errors.length > 0) {
+      res.status(500).json({
+        error: true,
+        errors,
+        successNum: success,
+        message: "Something went wrong",
+      });
+    } else {
+      res
+        .status(200)
+        .json({ success: true, message: "Saved!", successNum: success });
+    }
+  } catch (error) {
+    log("error", error);
+    res.status(500).json({ error: true, message: error, success: false });
+  }
+};
+export default withFiles(handler);
+
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
